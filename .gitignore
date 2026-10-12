@@ -221,3 +221,4 @@ __marimo__/
 data/raw/
 .DS_Store
 evaluation/review.html
+data/chunks_*.jsonl
