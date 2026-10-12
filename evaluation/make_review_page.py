@@ -28,6 +28,7 @@ function save() {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lines.join("\\n") + "\\n"]));
   a.download = "new_questions.jsonl"; a.click();
+  boxes.forEach(b => { if (b.value.trim()) { delete localStorage[b.dataset.id]; b.value = ""; b.disabled = true; } });
 }
 </script>"""
 open("evaluation/review.html", "w").write(page)
