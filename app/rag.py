@@ -35,15 +35,27 @@ class Generator:
         dtype = torch.float16 if device == "cuda" else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype).to(device)
 
-    def answer(self, question, passages, max_new_tokens=200):
+    def _inputs(self, question, passages):
         context = "\n\n".join(f"[{i}] {p['text']}" for i, p in enumerate(passages, 1))
         messages = [{"role": "system", "content": SYSTEM},
                     {"role": "user", "content": f"Passages:\n{context}\n\nQuestion: {question}"}]
-        inputs = self.tok.apply_chat_template(messages, add_generation_prompt=True, return_dict=True,
-                                              return_tensors="pt").to(self.model.device)
+        return self.tok.apply_chat_template(messages, add_generation_prompt=True, return_dict=True,
+                                            return_tensors="pt").to(self.model.device)
+
+    def answer(self, question, passages, max_new_tokens=200):
+        inputs = self._inputs(question, passages)
         with torch.no_grad():
             out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         return self.tok.decode(out[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+    def stream(self, question, passages, max_new_tokens=200):
+        from threading import Thread
+        from transformers import TextIteratorStreamer
+        streamer = TextIteratorStreamer(self.tok, skip_prompt=True, skip_special_tokens=True)
+        kwargs = {**self._inputs(question, passages), "streamer": streamer,
+                  "max_new_tokens": max_new_tokens, "do_sample": False}
+        Thread(target=self.model.generate, kwargs=kwargs).start()
+        yield from streamer
 
 
 def ask(question, retriever, translator, generator, k=5, method="rerank"):
