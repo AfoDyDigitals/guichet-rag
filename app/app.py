@@ -6,22 +6,30 @@ sys.path[:0] = [HERE, os.path.join(HERE, "..", "retrieval")]
 
 import gradio as gr
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from search import Retriever
 from rag import Translator, Generator, PAGE_URL
 
 CHUNKS = os.environ.get("GUICHET_CHUNKS", "chunks_sentence.jsonl")
 EMB = os.environ.get("GUICHET_EMB", "emb_sentence.npy")
-LLM = os.environ.get("GUICHET_LLM", "Qwen/Qwen2.5-1.5B-Instruct")
+try:
+    import spaces
+    gpu_task = spaces.GPU(duration=60)
+except ImportError:
+    gpu_task = lambda f: f
+
+DEVICE = "cuda" if (os.environ.get("SPACES_ZERO_GPU") or torch.cuda.is_available()) else "cpu"
+LLM = os.environ.get("GUICHET_LLM", "Qwen/Qwen2.5-3B-Instruct" if DEVICE == "cuda" else "Qwen/Qwen2.5-1.5B-Instruct")
 
 chunks = [json.loads(l) for l in open(CHUNKS)]
 emb = np.load(EMB)
 assert len(chunks) == len(emb), "chunks and embeddings don't match"
 retriever = Retriever(chunks,
-                      SentenceTransformer("intfloat/multilingual-e5-small", device="cpu"), emb,
-                      CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", max_length=512, device="cpu"))
-translator = Translator()
-generator = Generator(LLM)
+                      SentenceTransformer("intfloat/multilingual-e5-small", device=DEVICE), emb,
+                      CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", max_length=512, device=DEVICE))
+translator = Translator(device=DEVICE)
+generator = Generator(LLM, device=DEVICE)
 
 
 def short(p, words=300):
@@ -35,6 +43,7 @@ def sources_md(passages, query_fr):
     return "\n\n".join(lines)
 
 
+@gpu_task
 def respond(question):
     question = (question or "").strip()
     if not question:
@@ -43,7 +52,7 @@ def respond(question):
     query_fr = translator([question])[0]
     passages = [short(chunks[i]) for i in retriever.search("rerank", query_fr, 5)]
     sources = sources_md(passages, query_fr)
-    yield "_Writing the answer… (about 30 seconds on the free CPU)_", sources
+    yield "_Writing the answer…_", sources
     text = ""
     for piece in generator.stream(question, passages):
         text += piece
